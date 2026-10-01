@@ -1,0 +1,389 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  CUSTOMER
+  MERCHANT
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING
+  ACCEPTED
+  PREPARING
+  READY
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  UPI
+  COD
+  DEMO
+}
+
+enum PaymentStatus {
+  INITIATED
+  PROCESSING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum KhaataTxType {
+  CREDIT
+  DEBIT
+  SETTLEMENT
+}
+
+enum WebhookStatus {
+  PENDING
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
+model Shop {
+  id          String    @id @default(cuid())
+  name        String
+  ownerName   String
+  mobile      String
+  city        String    @default("Ranchi")
+  state       String    @default("Jharkhand")
+  address     String
+  isOpen      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  users       User[]
+  products    Product[]
+  customers   Customer[]
+  orders      Order[]
+  payments    PaymentTransaction[]
+  settlements Settlement[]
+
+  @@map("shops")
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String?   @unique
+  mobile       String    @unique
+  name         String
+  passwordHash String
+  role         Role      @default(CUSTOMER)
+  shopId       String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  shop         Shop?     @relation(fields: [shopId], references: [id])
+  auditLogs    AuditLog[]
+
+  @@map("users")
+}
+
+model Category {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  slug        String    @unique
+  description String?
+  image       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  products    Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id           String     @id @default(cuid())
+  shopId       String
+  categoryId   String
+  name         String
+  brand        String
+  unit         String     // e.g., "1 kg", "500 g", "1 L", "1 pack"
+  sku          String?    @unique
+  mrp          Float
+  price        Float      // selling price
+  image        String     @default("/images/placeholder.png")
+  description  String
+  isAvailable  Boolean    @default(true)
+  isActive     Boolean    @default(true)
+  tags         String[]   @default([])
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  shop         Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  category     Category   @relation(fields: [categoryId], references: [id])
+  inventory    Inventory?
+  cartItems    CartItem[]
+  orderItems   OrderItem[]
+
+  @@index([shopId, categoryId])
+  @@index([name, brand])
+  @@map("products")
+}
+
+model Inventory {
+  id            String   @id @default(cuid())
+  productId     String   @unique
+  stock         Int      @default(0)
+  reservedStock Int      @default(0)
+  reorderLevel  Int      @default(5)
+  updatedAt     DateTime @updatedAt
+
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("inventories")
+}
+
+model Customer {
+  id            String         @id @default(cuid())
+  shopId        String
+  name          String
+  mobile        String
+  address       String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  shop          Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  orders        Order[]
+  khaataAccount KhaataAccount?
+  addresses     Address[]
+
+  @@unique([shopId, mobile])
+  @@map("customers")
+}
+
+model Address {
+  id          String   @id @default(cuid())
+  customerId  String
+  street      String
+  landmark    String?
+  city        String   @default("Ranchi")
+  pincode     String   @default("834001")
+  isDefault   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@map("addresses")
+}
+
+model Cart {
+  id          String     @id @default(cuid())
+  sessionId   String     @unique // Cookie session ID or Customer ID
+  subtotal    Float      @default(0)
+  deliveryFee Float      @default(0)
+  total       Float      @default(0)
+  updatedAt   DateTime   @updatedAt
+  createdAt   DateTime   @default(now())
+
+  items       CartItem[]
+
+  @@map("carts")
+}
+
+model CartItem {
+  id          String   @id @default(cuid())
+  cartId      String
+  productId   String
+  quantity    Int      @default(1)
+  unitPrice   Float
+  totalPrice  Float
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cart        Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([cartId, productId])
+  @@map("cart_items")
+}
+
+model Order {
+  id              String               @id // e.g. "DK-1049"
+  shopId          String
+  customerId      String?
+  customerName    String
+  customerMobile  String
+  deliveryAddress String
+  subtotal        Float
+  deliveryFee     Float                @default(0)
+  total           Float
+  paymentMethod   PaymentMethod        @default(UPI)
+  paymentStatus   PaymentStatus        @default(INITIATED)
+  orderStatus     OrderStatus          @default(PENDING)
+  transactionRef  String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  shop            Shop                 @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  customer        Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  items           OrderItem[]
+  statusHistory   OrderStatusHistory[]
+  payments        PaymentTransaction[]
+
+  @@index([shopId, orderStatus])
+  @@index([customerMobile])
+  @@map("orders")
+}
+
+model OrderItem {
+  id          String   @id @default(cuid())
+  orderId     String
+  productId   String
+  name        String
+  brand       String
+  unit        String
+  quantity    Int
+  unitPrice   Float
+  totalPrice  Float
+
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@map("order_items")
+}
+
+model OrderStatusHistory {
+  id          String      @id @default(cuid())
+  orderId     String
+  status      OrderStatus
+  note        String?
+  changedBy   String      @default("SYSTEM")
+  timestamp   DateTime    @default(now())
+
+  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_status_history")
+}
+
+model PaymentTransaction {
+  id                    String        @id @default(cuid())
+  internalTransactionId String        @unique // e.g. "WB-DK-20260908-1049"
+  orderId               String
+  shopId                String
+  customerName          String
+  amount                Float
+  provider              String        @default("Eko")
+  adapter               String        @default("MockEkoAdapter")
+  environment           String        @default("Demo")
+  method                PaymentMethod @default(UPI)
+  status                PaymentStatus @default(INITIATED)
+  upiIntentUrl          String?
+  qrPayload             String?
+  responsePayload       Json?
+  note                  String?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  order                 Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  shop                  Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([internalTransactionId])
+  @@index([orderId])
+  @@map("payment_transactions")
+}
+
+model KhaataAccount {
+  id           String              @id @default(cuid())
+  customerId   String              @unique
+  balance      Float               @default(0) // Positive = customer owes money (credit given), Negative = advance paid
+  creditLimit  Float               @default(10000)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  customer     Customer            @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  transactions KhaataTransaction[]
+
+  @@map("khaata_accounts")
+}
+
+model KhaataTransaction {
+  id          String        @id @default(cuid())
+  accountId   String
+  type        KhaataTxType  // CREDIT (goods bought on credit), DEBIT (customer paid money), SETTLEMENT
+  amount      Float
+  balanceAfter Float
+  reference   String?       // Order ID or Payment Ref
+  note        String?
+  createdAt   DateTime      @default(now())
+
+  account     KhaataAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+  @@map("khaata_transactions")
+}
+
+model Settlement {
+  id              String        @id @default(cuid())
+  shopId          String
+  amount          Float
+  fee             Float         @default(0)
+  netAmount       Float
+  bankAccount     String
+  ifsc            String
+  status          PaymentStatus @default(INITIATED)
+  referenceId     String        @unique
+  settledAt       DateTime?
+  createdAt       DateTime      @default(now())
+
+  shop            Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@map("settlements")
+}
+
+model WebhookEvent {
+  id               String        @id @default(cuid())
+  eventId          String        @unique
+  provider         String        @default("Eko")
+  eventType        String
+  payload          Json
+  status           WebhookStatus @default(PENDING)
+  processingError  String?
+  processedAt      DateTime?
+  createdAt        DateTime      @default(now())
+
+  @@index([provider, eventId])
+  @@map("webhook_events")
+}
+
+model Notification {
+  id          String    @id @default(cuid())
+  recipient   String    // Mobile number or User ID
+  type        String    // SMS, WHATSAPP, EMAIL
+  title       String
+  body        String
+  status      String    @default("PENDING") // PENDING, SENT, FAILED
+  metadata    Json?
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@map("notifications")
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  action      String   // e.g. "UPDATE_ORDER_STATUS", "PRICE_OVERRIDE", "RESTOCK"
+  entity      String   // e.g. "Order", "Product", "Inventory"
+  entityId    String
+  metadata    Json?
+  timestamp   DateTime @default(now())
+
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
